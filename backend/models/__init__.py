@@ -1,0 +1,12 @@
+from backend.models.base import Base as Base
+from backend.models.conversation import Conversation as Conversation
+from backend.models.conversation import Message as Message
+from backend.models.hr import Absence as Absence
+from backend.models.hr import Department as Department
+from backend.models.hr import Dismissal as Dismissal
+from backend.models.hr import Employee as Employee
+from backend.models.hr import EmploymentHistory as EmploymentHistory
+from backend.models.hr import Enterprise as Enterprise
+from backend.models.hr import HRMetricPlan as HRMetricPlan
+from backend.models.hr import Position as Position
+from backend.models.hr import SalaryHistory as SalaryHistory
