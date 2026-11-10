@@ -1,4 +1,3 @@
-import unittest
 from datetime import date
 from decimal import Decimal
 
@@ -8,8 +7,9 @@ from sqlalchemy import distinct, func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from database_case import DatabaseTestCase
+
 from backend.api.schemas import Message as MessageResponse
-from backend.database import engine
 from backend.models import Base, Department, Dismissal, EmploymentHistory, Enterprise, HRMetricPlan, Message, Position
 from backend.seed import load_demo
 
@@ -20,15 +20,7 @@ def row_counts(session: Session) -> dict[str, int]:
     }
 
 
-class DatabaseTests(unittest.TestCase):
-    def setUp(self) -> None:
-        connection = engine.connect()
-        transaction = connection.begin()
-        self.session = Session(bind=connection, join_transaction_mode="create_savepoint")
-        self.addCleanup(connection.close)
-        self.addCleanup(transaction.rollback)
-        self.addCleanup(self.session.close)
-
+class DatabaseTests(DatabaseTestCase):
     def test_migration_matches_models(self) -> None:
         tables = set(inspect(self.session.connection()).get_table_names()) - {"alembic_version"}
         self.assertEqual(tables, set(Base.metadata.tables))

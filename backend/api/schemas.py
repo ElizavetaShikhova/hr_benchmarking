@@ -1,14 +1,14 @@
 from datetime import datetime
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 CellValue = Union[str, int, float, bool, None]
 DataRow = dict[str, CellValue]
 
 
 class MessageCreate(BaseModel):
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, pattern=r"\S")
 
 
 class MessageUpdate(BaseModel):
@@ -62,6 +62,8 @@ AnalysisResult = Annotated[
 
 
 class Conversation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     title: str
     created_at: datetime
@@ -69,6 +71,8 @@ class Conversation(BaseModel):
 
 
 class Message(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     conversation_id: int
     role: Literal["user", "assistant"]
@@ -84,6 +88,8 @@ class ConversationDetail(Conversation):
 
 
 class ReferenceItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
 
