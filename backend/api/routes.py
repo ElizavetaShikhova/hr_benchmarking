@@ -1,3 +1,4 @@
+from calendar import monthrange
 from typing import Annotated, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -15,11 +16,13 @@ from backend.api.schemas import (
     ReferenceItem,
     TableInfo,
     TableRows,
+    TurnoverQuery,
 )
 from backend.database import get_session
 from backend.models import Conversation as ConversationModel
 from backend.repositories.conversation_repository import ConversationRepository
 from backend.repositories.hr_repository import HRRepository
+from backend.services.analytics_service import TurnoverComparison, calculate_turnover
 
 router = APIRouter(prefix=config.API_PREFIX, responses={404: {"model": ErrorResponse}, 501: {"model": ErrorResponse}})
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -34,6 +37,11 @@ def require_conversation(repository: ConversationRepository, conversation_id: in
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.CONVERSATION_NOT_FOUND_MESSAGE)
     return conversation
+
+
+def require_enterprise(repository: HRRepository, enterprise_id: int) -> None:
+    if repository.get_enterprise(enterprise_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.ENTERPRISE_NOT_FOUND_MESSAGE)
 
 
 @router.post("/conversations", status_code=status.HTTP_201_CREATED)
@@ -86,14 +94,27 @@ def list_enterprises(session: SessionDep) -> list[ReferenceItem]:
 @router.get("/enterprises/{enterprise_id}/departments")
 def list_departments(enterprise_id: int, session: SessionDep) -> list[ReferenceItem]:
     repository = HRRepository(session)
-    if repository.get_enterprise(enterprise_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.ENTERPRISE_NOT_FOUND_MESSAGE)
+    require_enterprise(repository, enterprise_id)
     return [ReferenceItem.model_validate(item) for item in repository.get_departments(enterprise_id)]
 
 
 @router.get("/metrics")
 def list_metrics() -> list[Metric]:
     return [Metric.model_validate(item) for item in config.METRICS]
+
+
+@router.get("/metrics/turnover")
+def get_turnover(query: Annotated[TurnoverQuery, Query()], session: SessionDep) -> TurnoverComparison:
+    repository = HRRepository(session)
+    require_enterprise(repository, query.enterprise_id)
+    if query.department_id is not None and repository.get_department(query.enterprise_id, query.department_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.DEPARTMENT_NOT_FOUND_MESSAGE)
+    period_days = monthrange(query.period.year, query.period.month)[1]
+    period_end = query.period.replace(day=period_days)
+    employee_days, dismissals, plan = repository.get_turnover_data(
+        query.enterprise_id, query.department_id, query.period, period_end
+    )
+    return calculate_turnover(employee_days, period_days, dismissals, plan)
 
 
 @router.get("/data/tables")

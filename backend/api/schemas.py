@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+from backend.config import TURNOVER_PERIOD_MESSAGE
 
 CellValue = Union[str, int, float, bool, None]
 DataRow = dict[str, CellValue]
@@ -98,6 +100,19 @@ class Metric(BaseModel):
     code: str
     name: str
     unit: str
+
+
+class TurnoverQuery(BaseModel):
+    enterprise_id: int = Field(gt=0)
+    period: date
+    department_id: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("period")
+    @classmethod
+    def validate_period(cls, value: date) -> date:
+        if value.day != 1:
+            raise ValueError(TURNOVER_PERIOD_MESSAGE)
+        return value
 
 
 class TableInfo(BaseModel):

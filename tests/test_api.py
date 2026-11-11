@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select
@@ -9,7 +10,9 @@ from database_case import DatabaseTestCase
 from backend import config
 from backend.database import get_session
 from backend.main import app
-from backend.models import Conversation, Department, Enterprise, Message
+from backend.models import (
+    Conversation, Department, Dismissal, Employee, EmploymentHistory, Enterprise, HRMetricPlan, Message, Position,
+)
 
 
 class APITests(DatabaseTestCase):
@@ -50,6 +53,84 @@ class APITests(DatabaseTestCase):
         self.assertEqual(metrics["turnover_rate"], {"code": "turnover_rate", "name": "Текучесть кадров", "unit": "%"})
         self.assertEqual(metrics["headcount"]["unit"], "чел.")
         self.assertEqual(metrics["average_salary"]["unit"], "руб.")
+
+    def test_turnover_compares_demo_values_with_the_plan_for_each_scope(self) -> None:
+        enterprises = {item["name"]: item["id"] for item in self.client.get("/api/v1/enterprises").json()}
+        north, south = enterprises["Север"], enterprises["Юг"]
+        departments = self.client.get(f"/api/v1/enterprises/{north}/departments").json()
+        by_name = {item["name"]: item["id"] for item in departments}
+        for scope, expected in [
+            ({"enterprise_id": north}, (3.0, 1, 33.3333, 20.0, 13.3333)),
+            ({"enterprise_id": south}, (2.0, 0, 0.0, 5.0, -5.0)),
+            ({"enterprise_id": north, "department_id": by_name["Производство"]}, (2.5, 1, 40.0, 25.0, 15.0)),
+            ({"enterprise_id": north, "department_id": by_name["Администрация"]}, (0.5, 0, 0.0, None, None)),
+        ]:
+            with self.subTest(scope=scope):
+                response = self.client.get("/api/v1/metrics/turnover", params={**scope, "period": "2026-09-01"})
+                self.assertEqual(response.status_code, 200, response.text)
+                average, dismissals, turnover, plan, deviation = expected
+                self.assertEqual(response.json(), {
+                    "status": "completed", "average_headcount": average, "dismissals": dismissals,
+                    "turnover_percent": turnover, "plan_percent": plan, "deviation_pp": deviation,
+                })
+
+    def test_turnover_counts_both_month_boundaries_and_deduplicates_employee_days(self) -> None:
+        enterprise_id = self.session.scalar(select(Enterprise.id).order_by(Enterprise.id).limit(1))
+        department = Department(enterprise_id=enterprise_id, name="Проверка границ периода")
+        self.session.add(department)
+        self.session.flush()
+        position = Position(department_id=department.id, title="Инженер")
+        self.session.add(position)
+        self.session.flush()
+        first_employee, second_employee = self.session.scalars(select(Employee.id).order_by(Employee.id).limit(2)).all()
+        for employee_id, day, dismissed in [
+            (first_employee, date(2028, 2, 1), True),
+            (first_employee, date(2028, 2, 1), False),
+            (second_employee, date(2028, 2, 29), True),
+            (second_employee, date(2028, 3, 1), True),
+        ]:
+            employment = EmploymentHistory(employee_id=employee_id, position_id=position.id, start_date=day,
+                                           end_date=day, employment_type="full_time")
+            self.session.add(employment)
+            self.session.flush()
+            if dismissed:
+                self.session.add(Dismissal(employment_id=employment.id, dismissal_date=day, reason="Тест",
+                                           voluntary=False))
+        response = self.client.get("/api/v1/metrics/turnover", params={
+            "enterprise_id": enterprise_id, "department_id": department.id, "period": "2028-02-01",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "status": "completed", "average_headcount": 0.069, "dismissals": 2, "turnover_percent": 2900.0,
+            "plan_percent": None, "deviation_pp": None,
+        })
+
+    def test_turnover_with_no_employees_keeps_the_plan_but_has_no_rate(self) -> None:
+        enterprise_id = self.session.scalar(select(Enterprise.id).order_by(Enterprise.id).limit(1))
+        self.session.add(HRMetricPlan(enterprise_id=enterprise_id, metric_code=config.TURNOVER_METRIC_CODE,
+                                     period=date(2025, 8, 1), target_value=Decimal("0")))
+        self.session.flush()
+        response = self.client.get("/api/v1/metrics/turnover", params={
+            "enterprise_id": enterprise_id, "period": "2025-08-01",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "status": "insufficient_data", "average_headcount": 0.0, "dismissals": 0, "turnover_percent": None,
+            "plan_percent": 0.0, "deviation_pp": None,
+        })
+
+    def test_turnover_validates_the_month_and_department_ownership(self) -> None:
+        first, second = self.session.scalars(select(Enterprise.id).order_by(Enterprise.id)).all()
+        department_id = self.session.scalar(select(Department.id).where(Department.enterprise_id == second).limit(1))
+        response = self.client.get("/api/v1/metrics/turnover", params={
+            "enterprise_id": first, "department_id": department_id, "period": "2026-09-01",
+        })
+        self.assertEqual(response.status_code, 404)
+        response = self.client.get("/api/v1/metrics/turnover", params={
+            "enterprise_id": first, "period": "2026-09-02",
+        })
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"][0]["loc"], ["query", "period"])
 
     def test_create_conversation_is_persisted_and_has_empty_history(self) -> None:
         response = self.client.post("/api/v1/conversations")
