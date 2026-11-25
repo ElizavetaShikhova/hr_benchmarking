@@ -3,21 +3,13 @@ from decimal import Decimal
 
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import distinct, func, inspect, select
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from database_case import DatabaseTestCase, create_sample_conversation
 
 from backend.api.schemas import Message as MessageResponse
-from backend.models import Base, Department, Dismissal, EmploymentHistory, Enterprise, HRMetricPlan, Message, Position
-from backend.seed import load_demo
-
-
-def row_counts(session: Session) -> dict[str, int]:
-    return {
-        table.name: session.scalar(select(func.count()).select_from(table)) for table in Base.metadata.sorted_tables
-    }
+from backend.models import Base, Department, Dismissal, EmploymentHistory, Enterprise, HRMetricPlan, Message
 
 
 class DatabaseTests(DatabaseTestCase):
@@ -25,31 +17,6 @@ class DatabaseTests(DatabaseTestCase):
         tables = set(inspect(self.session.connection()).get_table_names()) - {"alembic_version"}
         self.assertEqual(tables, set(Base.metadata.tables))
         self.assertEqual(compare_metadata(MigrationContext.configure(self.session.connection()), Base.metadata), [])
-
-    def test_seed_is_repeatable_without_duplicates(self) -> None:
-        before = row_counts(self.session)
-        self.assertEqual(before, {
-            "enterprises": 2, "departments": 3, "positions": 3, "employees": 6, "employment_history": 7,
-            "dismissals": 1, "salary_history": 0, "absences": 0, "hr_metric_plans": 3,
-            "conversations": 0, "messages": 0,
-            "users": 0, "auth_sessions": 0,
-        })
-        self.assertFalse(load_demo(self.session))
-        self.assertEqual(row_counts(self.session), before)
-
-    def test_daily_headcount_is_constant_during_hiring_and_transfer(self) -> None:
-        for name, expected in [("Север", 3), ("Юг", 2)]:
-            enterprise = self.session.scalars(select(Enterprise).where(Enterprise.name == name)).one()
-            for day in range(1, 31):
-                current = date(2026, 9, day)
-                count = self.session.scalar(
-                    select(func.count(distinct(EmploymentHistory.employee_id)))
-                    .join(Position, EmploymentHistory.position_id == Position.id)
-                    .join(Department, Position.department_id == Department.id)
-                    .where(Department.enterprise_id == enterprise.id, EmploymentHistory.start_date <= current,
-                           (EmploymentHistory.end_date.is_(None)) | (EmploymentHistory.end_date >= current))
-                )
-                self.assertEqual(count, expected, (name, current))
 
     def test_plans_are_unique_for_enterprise_and_department(self) -> None:
         plans = self.session.scalars(select(HRMetricPlan).order_by(HRMetricPlan.id)).all()

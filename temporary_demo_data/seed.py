@@ -4,8 +4,8 @@ from decimal import Decimal
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backend.database import SessionFactory
 from backend.config import TURNOVER_METRIC_CODE
+from backend.database import SessionFactory
 from backend.models import Department, Dismissal, Employee, EmploymentHistory, Enterprise, HRMetricPlan, Position
 
 
