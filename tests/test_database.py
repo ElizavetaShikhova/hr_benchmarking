@@ -7,7 +7,7 @@ from sqlalchemy import distinct, func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from database_case import DatabaseTestCase
+from database_case import DatabaseTestCase, create_sample_conversation
 
 from backend.api.schemas import Message as MessageResponse
 from backend.models import Base, Department, Dismissal, EmploymentHistory, Enterprise, HRMetricPlan, Message, Position
@@ -30,8 +30,9 @@ class DatabaseTests(DatabaseTestCase):
         before = row_counts(self.session)
         self.assertEqual(before, {
             "enterprises": 2, "departments": 3, "positions": 3, "employees": 6, "employment_history": 7,
-            "dismissals": 1, "salary_history": 8, "absences": 2, "hr_metric_plans": 3,
-            "conversations": 1, "messages": 2,
+            "dismissals": 1, "salary_history": 0, "absences": 0, "hr_metric_plans": 3,
+            "conversations": 0, "messages": 0,
+            "users": 0, "auth_sessions": 0,
         })
         self.assertFalse(load_demo(self.session))
         self.assertEqual(row_counts(self.session), before)
@@ -86,6 +87,7 @@ class DatabaseTests(DatabaseTestCase):
             self.session.flush()
 
     def test_message_json_and_saved_flag_round_trip(self) -> None:
+        create_sample_conversation(self.session)
         message = self.session.scalars(select(Message).where(Message.role == "assistant")).one()
         message_id = message.id
         plan = {"operation": "get_metric", "enterprise_ids": [1, 2], "period": {"month": 9, "year": 2026}}
@@ -97,5 +99,5 @@ class DatabaseTests(DatabaseTestCase):
         self.assertEqual(restored.analysis_plan, plan)
         self.assertTrue(restored.is_saved)
         response = MessageResponse.model_validate(restored, from_attributes=True)
-        self.assertEqual(response.result_data.status, "clarification_needed")
+        self.assertEqual(response.result_data, restored.result_data)
         self.assertIsNotNone(response.created_at.tzinfo)

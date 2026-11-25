@@ -10,3 +10,5 @@ from backend.models.hr import Enterprise as Enterprise
 from backend.models.hr import HRMetricPlan as HRMetricPlan
 from backend.models.hr import Position as Position
 from backend.models.hr import SalaryHistory as SalaryHistory
+from backend.models.user import AuthSession as AuthSession
+from backend.models.user import User as User

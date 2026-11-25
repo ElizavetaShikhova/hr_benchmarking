@@ -1,27 +1,46 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from database_case import DatabaseTestCase
+from database_case import DatabaseTestCase, create_sample_conversation
 
 from backend import config
+from backend.api.auth import hash_token
 from backend.database import get_session
 from backend.main import app
+from backend.manage_users import add_user, set_access
 from backend.models import (
-    Conversation, Department, Dismissal, Employee, EmploymentHistory, Enterprise, HRMetricPlan, Message, Position,
+    AuthSession, Conversation, Department, Dismissal, Employee, EmploymentHistory, Enterprise, HRMetricPlan,
+    Message, Position, User,
 )
 
 
-class APITests(DatabaseTestCase):
+class APIClientTestCase(DatabaseTestCase):
     def setUp(self) -> None:
         super().setUp()
         app.dependency_overrides[get_session] = lambda: self.session
         self.addCleanup(app.dependency_overrides.pop, get_session)
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
+
+
+class APITests(APIClientTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        user = User(email="fixture@example.com", password_hash="unused-by-session-fixture")
+        self.session.add(user)
+        self.session.flush()
+        self.user_id = user.id
+        token = "fixture-api-session"
+        self.session.add(AuthSession(
+            token_hash=hash_token(token), user_id=self.user_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ))
+        self.session.flush()
+        self.client.headers["Authorization"] = f"Bearer {token}"
 
     def test_enterprises_and_departments_are_loaded_and_filtered(self) -> None:
         response = self.client.get("/api/v1/enterprises")
@@ -139,21 +158,23 @@ class APITests(DatabaseTestCase):
         self.assertEqual(conversation["title"], config.DEFAULT_CONVERSATION_TITLE)
         self.assertIsNotNone(datetime.fromisoformat(conversation["created_at"].replace("Z", "+00:00")).tzinfo)
         with Session(bind=self.session.connection(), join_transaction_mode="create_savepoint") as session:
-            self.assertEqual(session.get(Conversation, conversation["id"]).title, config.DEFAULT_CONVERSATION_TITLE)
+            created = session.get(Conversation, conversation["id"])
+            self.assertEqual(created.title, config.DEFAULT_CONVERSATION_TITLE)
+            self.assertEqual(created.user_id, self.user_id)
         history = self.client.get(f"/api/v1/conversations/{conversation['id']}")
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.json(), {**conversation, "messages": []})
         self.assertEqual(self.client.get("/api/v1/conversations").json()[0], conversation)
 
     def test_conversation_list_can_be_empty(self) -> None:
-        self.session.execute(delete(Message))
-        self.session.execute(delete(Conversation))
+        legacy_id = create_sample_conversation(self.session).id
         response = self.client.get("/api/v1/conversations")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
+        self.assertEqual(self.client.get(f"/api/v1/conversations/{legacy_id}").status_code, 404)
 
     def test_history_keeps_message_order_and_results(self) -> None:
-        conversation = self.session.scalars(select(Conversation)).one()
+        conversation = create_sample_conversation(self.session, self.user_id)
         messages = self.session.scalars(select(Message).order_by(Message.id)).all()
         messages[0].created_at = messages[1].created_at
         self.session.flush()
@@ -168,7 +189,7 @@ class APITests(DatabaseTestCase):
         self.assertEqual(self.client.get(f"/api/v1/conversations/{other['id']}").json()["messages"], [])
 
     def test_send_message_persists_question_and_updates_conversation_order(self) -> None:
-        conversation = self.session.scalars(select(Conversation)).one()
+        conversation = create_sample_conversation(self.session, self.user_id)
         conversation.updated_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
         self.session.flush()
         other = self.client.post("/api/v1/conversations").json()
@@ -193,8 +214,8 @@ class APITests(DatabaseTestCase):
         self.assertEqual(self.session.get(Message, message["id"]).content, question)
 
     def test_saved_flag_is_persisted_without_changing_analysis_or_history_order(self) -> None:
+        conversation = create_sample_conversation(self.session, self.user_id)
         message = self.session.scalars(select(Message).where(Message.role == "assistant")).one()
-        conversation = self.session.get(Conversation, message.conversation_id)
         original_updated_at = conversation.updated_at
         original_result = message.result_data
         for saved in [True, False]:
@@ -225,7 +246,7 @@ class APITests(DatabaseTestCase):
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Message)), before)
 
     def test_invalid_requests_return_422_without_creating_messages(self) -> None:
-        conversation = self.session.scalars(select(Conversation)).one()
+        conversation = create_sample_conversation(self.session, self.user_id)
         before = self.session.scalar(select(func.count()).select_from(Message))
         for body in [{}, {"question": ""}, {"question": " \n\t"}, {"question": None}, {"question": 12}]:
             with self.subTest(body=body):
@@ -235,9 +256,82 @@ class APITests(DatabaseTestCase):
         self.assertEqual(self.client.get("/api/v1/conversations/invalid").status_code, 422)
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Message)), before)
 
-    def test_data_endpoints_remain_stubs(self) -> None:
-        for path in ["/data/tables", "/data/tables/enterprises/rows", "/data/tables/enterprises/export"]:
-            with self.subTest(path=path):
-                response = self.client.get(f"/api/v1{path}")
-                self.assertEqual(response.status_code, 501)
-                self.assertEqual(response.json(), {"detail": config.NOT_IMPLEMENTED_MESSAGE})
+
+class AuthTests(APIClientTestCase):
+    password = "test account passphrase"
+
+    def login(self, email: str) -> dict[str, str]:
+        response = self.client.post("/api/v1/auth/login", json={"email": email, "password": self.password})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        token = response.json()["access_token"]
+        self.assertIsNotNone(self.session.get(AuthSession, hash_token(token)))
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_only_active_accounts_can_log_in_and_use_sessions(self) -> None:
+        email = "owner@example.com"
+        credentials = {"email": email, "password": self.password}
+        for path in ["/api/v1/conversations", "/api/v1/metrics", "/api/v1/auth/me"]:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
+        self.assertEqual(self.client.post("/api/v1/auth/register", json=credentials).status_code, 404)
+        self.assertEqual(self.client.post("/api/v1/auth/login", json=credentials).status_code, 401)
+
+        user_id = add_user(self.session, email, self.password)
+        self.assertIsNotNone(user_id)
+        self.assertTrue(self.session.get(User, user_id).password_hash.startswith("$argon2id$"))
+        self.assertEqual(self.client.post("/api/v1/auth/login", json={
+            **credentials, "password": "incorrect test password",
+        }).status_code, 401)
+        headers = self.login("OWNER@EXAMPLE.COM")
+        profile = self.client.get("/api/v1/auth/me", headers=headers).json()
+        self.assertEqual(set(profile), {"id", "email", "created_at"})
+        self.assertEqual(profile["email"], email)
+
+        set_access(self.session, email, False)
+        self.assertEqual(self.client.get("/api/v1/auth/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/login", json=credentials).status_code, 401)
+        set_access(self.session, email, True)
+        self.assertEqual(self.client.get("/api/v1/auth/me", headers=headers).status_code, 401)
+        self.assertNotEqual(self.login(email), headers)
+
+    def test_conversation_history_is_private_and_persists_across_sessions(self) -> None:
+        owner_email = "owner@example.com"
+        other_email = "other@example.org"
+        add_user(self.session, owner_email, self.password)
+        add_user(self.session, other_email, self.password)
+        owner = self.login(owner_email)
+        other = self.login(other_email)
+
+        response = self.client.post("/api/v1/conversations", headers=owner)
+        self.assertEqual(response.status_code, 201)
+        path = f"/api/v1/conversations/{response.json()['id']}"
+        question = {"question": "Мой вопрос"}
+        response = self.client.post(f"{path}/messages", json=question, headers=owner)
+        self.assertEqual(response.status_code, 202)
+        message = response.json()
+
+        self.assertEqual(self.client.get("/api/v1/conversations", headers=other).json(), [])
+        self.assertEqual(self.client.get(path, headers=other).status_code, 404)
+        self.assertEqual(self.client.post(f"{path}/messages", json=question, headers=other).status_code, 404)
+        self.assertEqual(self.client.patch(f"/api/v1/messages/{message['id']}", json={"is_saved": True},
+                                           headers=other).status_code, 404)
+
+        self.assertEqual(self.client.post("/api/v1/auth/logout", headers=owner).status_code, 204)
+        self.assertEqual(self.client.get(path, headers=owner).status_code, 401)
+        new_session = self.login(owner_email)
+        self.assertEqual(self.client.get(path, headers=new_session).json()["messages"], [message])
+
+    def test_expired_sessions_and_validation_errors(self) -> None:
+        email = "owner@example.com"
+        add_user(self.session, email, self.password)
+        headers = self.login(email)
+        token = headers["Authorization"].split()[1]
+        self.session.get(AuthSession, hash_token(token)).expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        self.session.flush()
+        self.assertEqual(self.client.get("/api/v1/auth/me", headers=headers).status_code, 401)
+
+        response = self.client.post("/api/v1/auth/login", json={"password": self.password})
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn(self.password, response.text)

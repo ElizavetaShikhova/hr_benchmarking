@@ -1,10 +1,10 @@
 from calendar import monthrange
-from typing import Annotated, Literal, NoReturn
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend import config
+from backend.api.auth import CurrentSession, SessionDep, auth_router, get_current_session
 from backend.api.schemas import (
     Conversation,
     ConversationDetail,
@@ -14,22 +14,18 @@ from backend.api.schemas import (
     MessageUpdate,
     Metric,
     ReferenceItem,
-    TableInfo,
-    TableRows,
     TurnoverQuery,
 )
-from backend.database import get_session
 from backend.models import Conversation as ConversationModel
 from backend.repositories.conversation_repository import ConversationRepository
 from backend.repositories.hr_repository import HRRepository
 from backend.services.analytics_service import TurnoverComparison, calculate_turnover
 
-router = APIRouter(prefix=config.API_PREFIX, responses={404: {"model": ErrorResponse}, 501: {"model": ErrorResponse}})
-SessionDep = Annotated[Session, Depends(get_session)]
-
-
-def not_implemented() -> NoReturn:
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=config.NOT_IMPLEMENTED_MESSAGE)
+router = APIRouter(prefix=config.API_PREFIX)
+protected_router = APIRouter(
+    dependencies=[Depends(get_current_session)],
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
 
 
 def require_conversation(repository: ConversationRepository, conversation_id: int) -> ConversationModel:
@@ -40,74 +36,74 @@ def require_conversation(repository: ConversationRepository, conversation_id: in
 
 
 def require_enterprise(repository: HRRepository, enterprise_id: int) -> None:
-    if repository.get_enterprise(enterprise_id) is None:
+    if not repository.enterprise_exists(enterprise_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.ENTERPRISE_NOT_FOUND_MESSAGE)
 
 
-@router.post("/conversations", status_code=status.HTTP_201_CREATED)
-def create_conversation(session: SessionDep) -> Conversation:
-    conversation = ConversationRepository(session).create()
+@protected_router.post("/conversations", status_code=status.HTTP_201_CREATED)
+def create_conversation(session: SessionDep, current_session: CurrentSession) -> Conversation:
+    conversation = ConversationRepository(session, current_session.user_id).create()
+    response = Conversation.model_validate(conversation)
     session.commit()
-    return Conversation.model_validate(conversation)
+    return response
 
 
-@router.get("/conversations")
-def list_conversations(session: SessionDep) -> list[Conversation]:
-    return [Conversation.model_validate(item) for item in ConversationRepository(session).list()]
+@protected_router.get("/conversations")
+def list_conversations(session: SessionDep, current_session: CurrentSession) -> list[Conversation]:
+    repository = ConversationRepository(session, current_session.user_id)
+    return [Conversation.model_validate(item) for item in repository.list()]
 
 
-@router.get("/conversations/{conversation_id}")
-def get_conversation(conversation_id: int, session: SessionDep) -> ConversationDetail:
-    repository = ConversationRepository(session)
-    conversation = require_conversation(repository, conversation_id)
-    return ConversationDetail(
-        **Conversation.model_validate(conversation).model_dump(),
-        messages=[Message.model_validate(item) for item in repository.get_messages(conversation_id)],
-    )
+@protected_router.get("/conversations/{conversation_id}")
+def get_conversation(conversation_id: int, session: SessionDep, current_session: CurrentSession) -> ConversationDetail:
+    repository = ConversationRepository(session, current_session.user_id)
+    return ConversationDetail.model_validate(require_conversation(repository, conversation_id))
 
 
-@router.post("/conversations/{conversation_id}/messages", status_code=status.HTTP_202_ACCEPTED)
-def send_message(conversation_id: int, body: MessageCreate, session: SessionDep) -> Message:
-    repository = ConversationRepository(session)
+@protected_router.post("/conversations/{conversation_id}/messages", status_code=status.HTTP_202_ACCEPTED)
+def send_message(conversation_id: int, body: MessageCreate, session: SessionDep, current_session: CurrentSession) -> Message:
+    repository = ConversationRepository(session, current_session.user_id)
     conversation = require_conversation(repository, conversation_id)
     message = repository.insert_message(conversation, body.question)
+    response = Message.model_validate(message)
     session.commit()
-    return Message.model_validate(message)
+    return response
 
 
-@router.patch("/messages/{message_id}")
-def update_message(message_id: int, body: MessageUpdate, session: SessionDep) -> Message:
-    repository = ConversationRepository(session)
+@protected_router.patch("/messages/{message_id}")
+def update_message(message_id: int, body: MessageUpdate, session: SessionDep, current_session: CurrentSession) -> Message:
+    repository = ConversationRepository(session, current_session.user_id)
     message = repository.get_message(message_id)
     if message is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.MESSAGE_NOT_FOUND_MESSAGE)
-    repository.set_saved(message, body.is_saved)
+    message.is_saved = body.is_saved
+    response = Message.model_validate(message)
     session.commit()
-    return Message.model_validate(message)
+    return response
 
 
-@router.get("/enterprises")
+@protected_router.get("/enterprises")
 def list_enterprises(session: SessionDep) -> list[ReferenceItem]:
     return [ReferenceItem.model_validate(item) for item in HRRepository(session).get_enterprises()]
 
 
-@router.get("/enterprises/{enterprise_id}/departments")
+@protected_router.get("/enterprises/{enterprise_id}/departments")
 def list_departments(enterprise_id: int, session: SessionDep) -> list[ReferenceItem]:
     repository = HRRepository(session)
     require_enterprise(repository, enterprise_id)
     return [ReferenceItem.model_validate(item) for item in repository.get_departments(enterprise_id)]
 
 
-@router.get("/metrics")
+@protected_router.get("/metrics")
 def list_metrics() -> list[Metric]:
     return [Metric.model_validate(item) for item in config.METRICS]
 
 
-@router.get("/metrics/turnover")
+@protected_router.get("/metrics/turnover")
 def get_turnover(query: Annotated[TurnoverQuery, Query()], session: SessionDep) -> TurnoverComparison:
     repository = HRRepository(session)
     require_enterprise(repository, query.enterprise_id)
-    if query.department_id is not None and repository.get_department(query.enterprise_id, query.department_id) is None:
+    if query.department_id is not None and not repository.department_exists(query.enterprise_id, query.department_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=config.DEPARTMENT_NOT_FOUND_MESSAGE)
     period_days = monthrange(query.period.year, query.period.month)[1]
     period_end = query.period.replace(day=period_days)
@@ -117,25 +113,5 @@ def get_turnover(query: Annotated[TurnoverQuery, Query()], session: SessionDep) 
     return calculate_turnover(employee_days, period_days, dismissals, plan)
 
 
-@router.get("/data/tables")
-def list_tables() -> list[TableInfo]:
-    not_implemented()
-
-
-@router.get("/data/tables/{table_name}/rows")
-def get_table_rows(
-    table_name: str, page: int = Query(1, ge=1), page_size: int = Query(config.DEFAULT_PAGE_SIZE, ge=1)
-) -> TableRows:
-    not_implemented()
-
-
-@router.get(
-    "/data/tables/{table_name}/export",
-    response_class=Response,
-    responses={200: {"content": {
-        config.CSV_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}},
-        config.XLSX_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}},
-    }}},
-)
-def export_table(table_name: str, format: Literal["csv", "xlsx"] = "csv") -> Response:
-    not_implemented()
+router.include_router(auth_router)
+router.include_router(protected_router)

@@ -17,18 +17,18 @@ class HRRepository:
     def get_enterprises(self) -> Sequence[Enterprise]:
         return self.session.scalars(select(Enterprise).order_by(Enterprise.name, Enterprise.id)).all()
 
-    def get_enterprise(self, enterprise_id: int) -> Optional[Enterprise]:
-        return self.session.get(Enterprise, enterprise_id)
+    def enterprise_exists(self, enterprise_id: int) -> bool:
+        return self.session.scalar(select(Enterprise.id).where(Enterprise.id == enterprise_id)) is not None
 
     def get_departments(self, enterprise_id: int) -> Sequence[Department]:
         return self.session.scalars(
             select(Department).where(Department.enterprise_id == enterprise_id).order_by(Department.name, Department.id)
         ).all()
 
-    def get_department(self, enterprise_id: int, department_id: int) -> Optional[Department]:
+    def department_exists(self, enterprise_id: int, department_id: int) -> bool:
         return self.session.scalar(
-            select(Department).where(Department.enterprise_id == enterprise_id, Department.id == department_id)
-        )
+            select(Department.id).where(Department.enterprise_id == enterprise_id, Department.id == department_id)
+        ) is not None
 
     def get_turnover_data(
         self, enterprise_id: int, department_id: Optional[int], period_start: date, period_end: date
