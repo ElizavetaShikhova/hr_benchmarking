@@ -2,15 +2,14 @@ from argparse import ArgumentParser
 from getpass import getpass
 from typing import Optional
 
-from pydantic import EmailStr, TypeAdapter, ValidationError
+from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import delete, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from backend.config import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 from backend.database import SessionFactory
-from backend.models import AuthSession, User
-from backend.models.user import password_hasher
+from backend.models import AuthSession, User, password_hasher
 
 
 def add_user(session: Session, email: str, password: str) -> Optional[int]:
@@ -33,10 +32,10 @@ def main() -> None:
     parser.add_argument("email")
     args = parser.parse_args()
 
-    try:
-        email = TypeAdapter(EmailStr).validate_python(args.email).casefold()
-    except ValidationError:
+    email_adapter = TypeAdapter(EmailStr)
+    if not email_adapter.validator.isinstance_python(args.email):
         parser.error("Укажите корректный email.")
+    email = email_adapter.validate_python(args.email).casefold()
 
     if args.action == "add":
         password = getpass("Пароль: ")

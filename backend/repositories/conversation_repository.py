@@ -19,15 +19,12 @@ class ConversationRepository:
         return conversation
 
     def list(self) -> Sequence[Conversation]:
-        return self.session.scalars(
-            select(Conversation).where(Conversation.user_id == self.user_id)
-            .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
-        ).all()
+        query = select(Conversation).where(Conversation.user_id == self.user_id)
+        return self.session.scalars(query.order_by(Conversation.updated_at.desc(), Conversation.id.desc())).all()
 
     def get(self, conversation_id: int) -> Optional[Conversation]:
-        return self.session.scalar(select(Conversation).where(
-            Conversation.id == conversation_id, Conversation.user_id == self.user_id,
-        ))
+        query = select(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == self.user_id)
+        return self.session.scalar(query)
 
     def insert_message(self, conversation: Conversation, content: str) -> Message:
         message = Message(conversation_id=conversation.id, role="user", content=content)
@@ -37,6 +34,5 @@ class ConversationRepository:
         return message
 
     def get_message(self, message_id: int) -> Optional[Message]:
-        return self.session.scalar(select(Message).join(Conversation).where(
-            Message.id == message_id, Conversation.user_id == self.user_id,
-        ))
+        query = select(Message).join(Conversation).where(Message.id == message_id, Conversation.user_id == self.user_id)
+        return self.session.scalar(query)

@@ -40,10 +40,7 @@ def upgrade() -> None:
         sa.Column("end_date", sa.Date(), nullable=False),
         sa.Column("absence_type", sa.String(), nullable=False),
         sa.CheckConstraint("end_date >= start_date", name="ck_absence_dates"),
-        sa.ForeignKeyConstraint(
-            ["employee_id"],
-            ["employees.id"],
-        ),
+        sa.ForeignKeyConstraint(["employee_id"], ["employees.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
@@ -51,10 +48,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("enterprise_id", sa.Integer(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["enterprise_id"],
-            ["enterprises.id"],
-        ),
+        sa.ForeignKeyConstraint(["enterprise_id"], ["enterprises.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "enterprise_id", name="uq_departments_enterprise"),
     )
@@ -69,10 +63,7 @@ def upgrade() -> None:
         sa.Column("is_saved", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("role IN ('user', 'assistant')", name="ck_message_role"),
-        sa.ForeignKeyConstraint(
-            ["conversation_id"],
-            ["conversations.id"],
-        ),
+        sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
@@ -84,22 +75,14 @@ def upgrade() -> None:
         sa.Column("period", sa.Date(), nullable=False),
         sa.Column("target_value", sa.Numeric(precision=14, scale=4), nullable=False),
         sa.ForeignKeyConstraint(
-            ["department_id", "enterprise_id"],
-            ["departments.id", "departments.enterprise_id"],
+            ["department_id", "enterprise_id"], ["departments.id", "departments.enterprise_id"],
             name="fk_metric_plan_department",
         ),
-        sa.ForeignKeyConstraint(
-            ["enterprise_id"],
-            ["enterprises.id"],
-        ),
+        sa.ForeignKeyConstraint(["enterprise_id"], ["enterprises.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "enterprise_id",
-            "department_id",
-            "metric_code",
-            "period",
-            name="uq_metric_plan_scope",
-            postgresql_nulls_not_distinct=True,
+            "enterprise_id", "department_id", "metric_code", "period",
+            name="uq_metric_plan_scope", postgresql_nulls_not_distinct=True,
         ),
     )
     op.create_table(
@@ -107,10 +90,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("department_id", sa.Integer(), nullable=False),
         sa.Column("title", sa.String(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["department_id"],
-            ["departments.id"],
-        ),
+        sa.ForeignKeyConstraint(["department_id"], ["departments.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
@@ -122,14 +102,8 @@ def upgrade() -> None:
         sa.Column("end_date", sa.Date(), nullable=True),
         sa.Column("employment_type", sa.String(), nullable=False),
         sa.CheckConstraint("end_date IS NULL OR end_date >= start_date", name="ck_employment_dates"),
-        sa.ForeignKeyConstraint(
-            ["employee_id"],
-            ["employees.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["position_id"],
-            ["positions.id"],
-        ),
+        sa.ForeignKeyConstraint(["employee_id"], ["employees.id"]),
+        sa.ForeignKeyConstraint(["position_id"], ["positions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
@@ -139,10 +113,7 @@ def upgrade() -> None:
         sa.Column("dismissal_date", sa.Date(), nullable=False),
         sa.Column("reason", sa.String(), nullable=False),
         sa.Column("voluntary", sa.Boolean(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["employment_id"],
-            ["employment_history.id"],
-        ),
+        sa.ForeignKeyConstraint(["employment_id"], ["employment_history.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("employment_id"),
     )
@@ -155,10 +126,7 @@ def upgrade() -> None:
         sa.Column("salary", sa.Numeric(precision=14, scale=2), nullable=False),
         sa.CheckConstraint("effective_to IS NULL OR effective_to >= effective_from", name="ck_salary_dates"),
         sa.CheckConstraint("salary >= 0", name="ck_salary_nonnegative"),
-        sa.ForeignKeyConstraint(
-            ["employment_id"],
-            ["employment_history.id"],
-        ),
+        sa.ForeignKeyConstraint(["employment_id"], ["employment_history.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
 

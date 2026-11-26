@@ -21,14 +21,12 @@ class HRRepository:
         return self.session.scalar(select(Enterprise.id).where(Enterprise.id == enterprise_id)) is not None
 
     def get_departments(self, enterprise_id: int) -> Sequence[Department]:
-        return self.session.scalars(
-            select(Department).where(Department.enterprise_id == enterprise_id).order_by(Department.name, Department.id)
-        ).all()
+        query = select(Department).where(Department.enterprise_id == enterprise_id)
+        return self.session.scalars(query.order_by(Department.name, Department.id)).all()
 
     def department_exists(self, enterprise_id: int, department_id: int) -> bool:
-        return self.session.scalar(
-            select(Department.id).where(Department.enterprise_id == enterprise_id, Department.id == department_id)
-        ) is not None
+        query = select(Department.id).where(Department.enterprise_id == enterprise_id, Department.id == department_id)
+        return self.session.scalar(query) is not None
 
     def get_turnover_data(
         self, enterprise_id: int, department_id: Optional[int], period_start: date, period_end: date
@@ -66,7 +64,6 @@ class HRRepository:
             HRMetricPlan.metric_code == config.TURNOVER_METRIC_CODE,
             HRMetricPlan.period == period_start,
         ).scalar_subquery()
-        employee_day_count, dismissal_count, target_value = self.session.execute(
-            select(employee_days, dismissals, plan)
-        ).one()
+        query = select(employee_days, dismissals, plan)
+        employee_day_count, dismissal_count, target_value = self.session.execute(query).one()
         return employee_day_count, dismissal_count, target_value
